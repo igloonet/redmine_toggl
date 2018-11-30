@@ -97,6 +97,7 @@ class TogglEntry < ActiveRecord::Base
 
   def update_time_entry
     self.issue = Issue.find_by_id(issue_id)
+    activity = Enumeration.find_by(:is_default => true, :type => 'TimeEntryActivity')
 
     if self.issue &&
       (self.user.allowed_to?(:log_time, self.issue.project) ||
@@ -108,15 +109,23 @@ class TogglEntry < ActiveRecord::Base
         :user => self.user,
         :hours => duration.to_f / 3600,
         :spent_on => start,
+        :activity => activity,
         :comments => description.gsub(ISSUE_MATCHER, ' ').strip
       }
 
       related_activity = RedmineToggl.activity_for_tags(toggl_tags) || TimeEntryActivity.default.try(:id)
       time_entry_attributes[:activity_id] = related_activity if related_activity.present?
 
-      self.time_entry ||= build_time_entry
-      self.time_entry.assign_attributes(time_entry_attributes)
-      self.time_entry.save! if self.time_entry.changed?
+      User.current = self.user
+
+      begin
+        self.time_entry ||= build_time_entry
+        self.time_entry.assign_attributes(time_entry_attributes)
+        self.time_entry.save! if self.time_entry.changed?
+      rescue => e
+        log ||= Logger.new("#{Rails.root}/log/toggle.log")
+        log.debug(self.user.login + ' - ' + e.message)
+      end
     else
       # we only create time_entries for issues, so if no issue, no time_entry
       self.time_entry.destroy if self.time_entry
