@@ -1,4 +1,3 @@
-require 'togglv8'
 require 'json'
 
 class TogglService
@@ -31,12 +30,15 @@ class TogglService
       @apikey = @user.custom_field_value(TogglService.custom_field_api_key)
     end
 
-    @toggl = TogglV8::API.new(@apikey) if @apikey.present?
+    return nil if @apikey.blank?
+
+    @toggl = TogglV9.new(@apikey)
   end
 
   def get_toggl_time_entries
     args = @apiparams || {}
-    @toggl_time_entries = @toggl.get_time_entries(args)
+    received_entries = @toggl.get_time_entries(args)
+    @toggl_time_entries = received_entries.map{|k| format_time_entry(k)}
   end
 
   def get_toggl_workspaces
@@ -63,6 +65,13 @@ class TogglService
 
   def format_time_entry(entry)
     entry.delete('duronly')
+    entry.delete('server_deleted_at')
+    entry.delete('tag_ids')
+    entry.delete('permissions')
+
+    entry['wid'] = entry.delete('workspace_id')
+    entry['pid'] = entry.delete('project_id')
+    entry['tid'] = entry.delete('task_id')
     entry['toggl_id'] = entry.delete('id')
     entry['user_id'] = @user.id
     entry['toggl_tags'] = entry.delete('tags') || []
@@ -76,9 +85,8 @@ class TogglService
     @tasks = Hash[TogglTask.pluck(:toggl_id, :id)]
   end
 
-  def save_toggl_entry_from_toggl_data(raw_entry)
-    entry = format_time_entry(raw_entry)
-    return if entry['duration'].to_i < 1
+  def save_toggl_entry_from_toggl_data(entry)
+    return {} if entry['duration'].to_i < 1
 
     toggl_entry = TogglEntry.where(:toggl_id => entry['toggl_id']).first_or_initialize
     toggl_entry.assign_attributes(entry)
@@ -92,7 +100,11 @@ class TogglService
   rescue => e
     Rails.logger.error e.message
     Rails.logger.error e.backtrace.join("\n")
-    raise
+
+    {
+      :error => e.message,
+      :toggl_entry => entry
+    }
   end
 
   def save_toggl_time_entries
@@ -152,8 +164,8 @@ class TogglService
     remove_missing_toggl_time_entries if @remove_missing
   end
 
-  def delete_time_entry(entry_id)
-    @toggl.delete_time_entry(entry_id)
+  def delete_time_entry(entry_id, workspace_id)
+    @toggl.delete_time_entry(entry_id, workspace_id)
   end
 
   def parse_api_opts(opts)
@@ -174,14 +186,18 @@ class TogglService
   end
 
   def update_time_entry(opts)
-    toggl_id = opts.with_indifferent_access[:toggl_id].to_i
+    hashed_opts = HashWithIndifferentAccess.new(opts)
+    toggl_id = hashed_opts[:toggl_id].to_i
+    workspace_id = TogglWorkspace.find_by_id(hashed_opts[:toggl_workspace_id])&.toggl_id
     time_entry_opts = parse_api_opts(opts)
     populate_toggl_base
 
     ActiveRecord::Base.transaction do
       fail I18n.t('toggl.invalid_duration') if time_entry_opts['duration'].to_i < 1
-      entry = @toggl.update_time_entry(toggl_id, time_entry_opts)
-      save_toggl_entry_from_toggl_data(entry)
+      entry_raw = @toggl.update_time_entry(toggl_id, workspace_id, time_entry_opts)
+      entry = format_time_entry(entry_raw)
+      resp = save_toggl_entry_from_toggl_data(entry)
+      raise resp[:error] if resp[:error].present?
     end
   end
 
