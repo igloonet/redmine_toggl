@@ -160,5 +160,28 @@ namespace :toggl do
     return nil unless time_in_int > 0
     time_in_int.hours.ago
   end
-end
 
+  def format_toggl_service_errors(ts_response)
+    return if ts_response.blank? || ts_response[:errors].blank?
+
+    ts_response[:errors].each do |login, errors|
+      errors.each do |error|
+        # raise error[:error] unless error[:error] =~ /^HTTP Status: 4/
+
+        formatted = format(
+          'ERROR FOR USER: %s MESSAGE: %s TOGGL_ENTRY: %s',
+          login,
+          error[:error],
+          (error[:toggl_entry].presence || I18n.t('toggl.toggl_could_not_fetch'))
+        )
+
+        STDERR.puts formatted
+      end
+
+      user = User.find_by_login(login)
+      next unless user
+
+      Mailer.toggl_report_invalid_user_toggl_entry(user, errors, user.language).deliver_now
+    end
+  end
+end
