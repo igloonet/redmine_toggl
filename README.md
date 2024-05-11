@@ -175,6 +175,6 @@ Manage what users can do with Redmine permissions.
 
 ## License
 
-Copyright (c) 2016 - 2018 Onur Küçük. Licensed under [GNU GPLv2](LICENSE)
+Copyright (c) 2016 - 2024 Onur Küçük. Licensed under [GNU GPLv2](LICENSE)
 
 
